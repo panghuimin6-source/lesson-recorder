@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>录音上传</title>
+  <style>
+    body { font-family: system-ui, Arial; padding: 24px; }
+    button { margin: 8px 8px 8px 0; padding: 10px 16px; }
+    #log { margin-top: 12px; white-space: pre-wrap; font-size: 14px; }
+    audio { display: block; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <h1>录音上传</h1>
+  <button id="start">开始录音</button>
+  <button id="stop" disabled>停止录音</button>
+  <button id="upload" disabled>上传录音</button>
+  <div id="log"></div>
+  <audio id="player" controls></audio>
+
+  <script>
+    let mediaRecorder, chunks = [], audioBlob = null, mimeType = 'audio/webm';
+
+    const $ = sel => document.querySelector(sel);
+    const log = (...args) => { $('#log').textContent += args.join(' ') + '\n'; };
+
+    $('#start').onclick = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        mimeType = mediaRecorder.mimeType || 'audio/webm';
+        chunks = [];
+        mediaRecorder.ondataavailable = e => e.data && chunks.push(e.data);
+        mediaRecorder.onstop = () => {
+          audioBlob = new Blob(chunks, { type: mimeType });
+          $('#player').src = URL.createObjectURL(audioBlob);
+          $('#upload').disabled = false;
+          stream.getTracks().forEach(t => t.stop());
+          log('🎙️ 录音完成，大小：', (audioBlob.size/1024).toFixed(1), 'KB');
+        };
+        mediaRecorder.start();
+        $('#start').disabled = true;
+        $('#stop').disabled = false;
+        log('🔴 正在录音...');
+      } catch (e) {
+        alert('请允许使用麦克风'); log('❗麦克风授权失败：', e.message);
+      }
+    };
+
+    $('#stop').onclick = () => {
+      mediaRecorder && mediaRecorder.stop();
+      $('#stop').disabled = true;
+      $('#start').disabled = false;
+    };
+
+    $('#upload').onclick = async () => {
+      if (!audioBlob) return alert('请先录音');
+      try {
+        // 1) 向同域的后端函数要最新 uploadToken
+        const tokenResp = await fetch('/api/get-upload-token');
+        const { token } = await tokenResp.json();
+        if (!token) throw new Error('未拿到 uploadToken');
+
+        // 2) 生成唯一文件名（按需改前缀/后缀）
+        const ext = mimeType.includes('mp4') ? 'm4a' : (mimeType.includes('webm') ? 'webm' : 'wav');
+        const key = `records/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+
+        // 3) 上传到七牛（注意：如果你的桶在其他区域，需改上传域名）
+        const form = new FormData();
+        form.append('file', audioBlob, key);
+        form.append('key', key);
+        form.append('token', token);
+
+        const upResp = await fetch('https://upload.qiniup.com', { method: 'POST', body: form });
+        const upJson = await upResp.json();
+
+        if (upJson.key) {
+          // 你在七牛绑定的访问域名，后面步骤会配置到环境变量里
+          const publicDomain = (window.QINIU_PUBLIC_DOMAIN || '').replace(/\/+$/,'');
+          const url = publicDomain ? `${publicDomain}/${upJson.key}` : upJson.key;
+          log('✅ 上传成功：', url);
+          alert('上传成功！');
+        } else {
+          log('❌ 上传失败：', JSON.stringify(upJson));
+          alert('上传失败，详见日志');
+        }
+      } catch (e) {
+        log('❌ 出错：', e.message); alert('上传失败：' + e.message);
+      }
+    };
+  </script>
+</body>
+</html>
