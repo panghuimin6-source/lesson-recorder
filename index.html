@@ -1,43 +1,64 @@
-<script>
-async function uploadRecording(blob) {
-  try {
-    // 1. 去后端拿 token
-    const tokenRes = await fetch('/api/get-upload-token');
-    const { token } = await tokenRes.json();
-    console.log("拿到的 token:", token);
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>录音上传示例</title>
+</head>
+<body>
+  <h1>录音上传到七牛示例</h1>
 
-    // 2. 构造 FormData
+  <button id="startBtn">开始录音</button>
+  <button id="stopBtn">停止录音</button>
+  <button id="uploadBtn">上传录音</button>
+
+  <script>
+  let mediaRecorder;
+  let audioChunks = [];
+
+  // 开始录音
+  document.getElementById('startBtn').onclick = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    audioChunks = [];
+    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+    mediaRecorder.start();
+    alert('开始录音');
+  };
+
+  // 停止录音
+  document.getElementById('stopBtn').onclick = () => {
+    if (!mediaRecorder) return alert('请先开始录音');
+    mediaRecorder.stop();
+    mediaRecorder.onstop = () => alert('录音停止，准备上传');
+  };
+
+  // 上传录音到后端
+  document.getElementById('uploadBtn').onclick = async () => {
+    if (audioChunks.length === 0) return alert('没有录音可以上传');
+    const blob = new Blob(audioChunks, { type: 'audio/mp3' });
     const formData = new FormData();
-    const fileName = `record-${Date.now()}.mp3`;
-    formData.append('file', blob, fileName);
-    formData.append('token', token);
-    formData.append('key', fileName);
+    formData.append('file', blob, `record-${Date.now()}.mp3`);
 
-    // 3. 上传到七牛（华东-2）
-    const res = await fetch('https://up-cn-east-2.qiniup.com', {
-      method: 'POST',
-      body: formData
-    });
-
-    const text = await res.text();
-    console.log("上传返回结果:", text);
-
-    if (!res.ok) throw new Error('上传失败');
-
-    // 4. 播放地址
-    const fileUrl = `http://t1i0t9lk0.hd-bkt.clouddn.com/${fileName}`;
-    console.log("播放 URL:", fileUrl);
-    alert('上传成功！可播放 URL 已生成');
-
-    // 5. 页面上播放
-    const audio = document.createElement('audio');
-    audio.controls = true;
-    audio.src = fileUrl;
-    document.body.appendChild(audio);
-
-  } catch (err) {
-    console.error("上传出错:", err);
-    alert('上传发生错误');
-  }
-}
-</script>
+    try {
+      const res = await fetch('/api/upload', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (data.url) {
+        alert('上传成功！可播放 URL 已生成');
+        let audio = document.querySelector('#uploadedPlayer');
+        if (!audio) {
+          audio = document.createElement('audio');
+          audio.id = 'uploadedPlayer';
+          audio.controls = true;
+          document.body.appendChild(audio);
+        }
+        audio.src = data.url;
+      } else {
+        alert('上传失败：' + (data.error || '未知错误'));
+      }
+    } catch (err) {
+      alert('上传失败：' + err.message);
+    }
+  };
+  </script>
+</body>
+</html>
